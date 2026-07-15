@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Formateur de bases élèves — EcolePay</title>
+</head>
+<body>
+<div id="ep-root">
+  <p style="font-family:sans-serif;color:#666;padding:20px;">Chargement de l'outil…</p>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  #ep-root {
+    --ep-navy: #0B3D5C;
+    --ep-navy-deep: #082C42;
+    --ep-teal: #1C8C7A;
+    --ep-blue: #1C6FA5;
+    --ep-blue-dark: #0C447C;
+    --ep-amber: #C97A1F;
+    --ep-amber-bg: #FCF1DE;
+    --ep-amber-border: #E9B872;
+    --ep-violet: #6C4FB6;
+    --ep-violet-bg: #F1ECFB;
+    --ep-green: #1F7A4D;
+    --ep-green-bg: #E9F6EF;
+    --ep-red: #B23B2E;
+    --ep-red-bg: #FBEAE7;
+    font-family: var(--font-sans, -apple-system, sans-serif); color: var(--text-primary, #1a1a1a); max-width: 100%;
+  }
+  .ep-hero { background: linear-gradient(135deg, var(--ep-navy) 0%, var(--ep-navy-deep) 100%); border-radius: 12px; padding: 22px 24px; margin-bottom: 16px; color: #fff; position: relative; overflow: hidden; }
+  .ep-hero::after { content: ''; position: absolute; top: -40px; right: -40px; width: 160px; height: 160px; border-radius: 50%; background: radial-gradient(circle, rgba(28,140,122,0.35), transparent 70%); }
+  .ep-hero .ep-h1 { color: #fff; font-size: 19px; }
+  .ep-hero .ep-sub { color: rgba(255,255,255,0.75); margin-bottom: 18px; }
+  .ep-card { background: var(--surface-1, #fafaf9); border: 1px solid var(--border, #e5e3dc); border-left: 3px solid var(--border, #e5e3dc); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .ep-card.ep-accent-blue { border-left-color: var(--ep-blue); }
+  .ep-card.ep-accent-teal { border-left-color: var(--ep-teal); }
+  .ep-card.ep-accent-violet { border-left-color: var(--ep-violet); }
+  .ep-card.ep-accent-green { border-left-color: var(--ep-green); }
+  .ep-h1 { font-size: 18px; font-weight: 500; margin: 0 0 4px; }
+  .ep-sub { font-size: 13px; color: var(--text-secondary, #6b6a64); margin: 0 0 16px; }
+  .ep-drop { border: 1.5px dashed rgba(255,255,255,0.35); border-radius: 10px; padding: 32px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; background: rgba(255,255,255,0.04); }
+  .ep-drop:hover, .ep-drop.drag { border-color: var(--ep-teal); background: rgba(28,140,122,0.15); }
+  .ep-drop input { display: none; }
+  .ep-drop-label { font-size: 14px; color: rgba(255,255,255,0.8); }
+  .ep-drop-label b { color: #fff; font-weight: 600; }
+  .ep-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .ep-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; user-select: none; }
+  .ep-toggle input { width: 15px; height: 15px; cursor: pointer; accent-color: var(--ep-blue); }
+  .ep-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .ep-stat { background: var(--surface-2, #fff); border: 1px solid var(--border, #e5e3dc); border-top: 3px solid var(--ep-blue); border-radius: 8px; padding: 10px 14px; min-width: 110px; }
+  .ep-stat.good { border-top-color: var(--ep-green); }
+  .ep-stat.warn { border-top-color: var(--ep-red); }
+  .ep-stat-num { font-size: 20px; font-weight: 500; }
+  .ep-stat.good .ep-stat-num { color: var(--ep-green); }
+  .ep-stat.warn .ep-stat-num { color: var(--ep-red); }
+  table.ep-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.ep-table th { text-align: left; font-weight: 600; padding: 8px 10px; border-bottom: 2px solid var(--border-strong, #c9c6ba); position: sticky; top: 0; background: var(--surface-1, #fafaf9); color: var(--ep-navy); }
+  table.ep-table td { padding: 6px 10px; border-bottom: 1px solid var(--border, #e5e3dc); }
+  table.ep-table td.empty { color: var(--text-muted, #a3a199); font-style: italic; }
+  table.ep-table td[contenteditable] { cursor: text; outline: none; }
+  table.ep-table td[contenteditable]:hover { background: var(--ep-green-bg); box-shadow: inset 0 0 0 1px var(--border-strong, #c9c6ba); }
+  table.ep-table td[contenteditable]:focus { background: #fff; box-shadow: inset 0 0 0 1.5px var(--ep-blue); }
+  table.ep-table td.ep-edited { background: var(--ep-amber-bg); box-shadow: inset 0 0 0 1px var(--ep-amber-border); }
+  .ep-edit-hint { font-size: 12px; color: var(--text-secondary, #6b6a64); margin: -4px 0 10px; }
+  .ep-scroll { max-height: 360px; overflow: auto; border: 1px solid var(--border, #e5e3dc); border-radius: 8px; }
+  .ep-btn { background: var(--ep-blue); color: #fff; border: none; border-radius: 8px; padding: 10px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: background .15s; }
+  .ep-btn:hover { background: var(--ep-blue-dark); }
+  .ep-btn.secondary { background: transparent; color: var(--ep-navy); border: 1px solid var(--border-strong, #c9c6ba); }
+  .ep-btn.secondary:hover { border-color: var(--ep-blue); color: var(--ep-blue); background: #EAF3FA; }
+  .ep-btn.ai { background: var(--ep-violet); }
+  .ep-btn.ai:hover { background: #5A3F9E; }
+  .ep-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .ep-mapping-row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .ep-mapping-row input { border: 1px solid var(--border, #e5e3dc); border-radius: 6px; padding: 6px 8px; font-size: 13px; width: 100%; box-sizing: border-box; }
+  .ep-mapping-row .arrow { color: var(--text-muted, #a3a199); font-size: 12px; }
+  .ep-filename { font-size: 13px; font-weight: 500; }
+
+  .ep-select { border: 1px solid var(--border, #e5e3dc); border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+  .ep-hidden { display: none; }
+  .ep-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 20px; background: #EAF3DE; color: #27500A; }
+</style>
+<script>
+(function(){
+  const root = document.getElementById('ep-root');
+  try {
+    runApp();
+  } catch (err) {
+    root.innerHTML = `<div style="font-family:sans-serif;background:#FCEBEB;border:1px solid #E24B4A;border-radius:8px;padding:16px;color:#501313;">
+      <b>L'outil n'a pas pu démarrer.</b><br>
+      <span style="font-size:13px;">${(err && err.message) ? err.message.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) : 'Erreur inconnue'}</span><br>
+      <span style="font-size:12px;color:#712b13;">Astuce : essayez d'ouvrir ce fichier dans Chrome ou Firefox plutôt que dans un aperçu intégré, et vérifiez votre connexion internet (l'outil charge deux bibliothèques externes).</span>
+    </div>`;
+    console.error(err);
+  }
+
+  function runApp() {
+  const HEADER_ALIASES = {
+    matricule: ['matricule', 'mat', 'id'],
+    nom: ['nom'],
+    prenom: ['prenom', 'prenoms', 'prénom', 'prénoms'],
+    nomcomplet: ['nom et prenoms', 'nom et prenom', 'nom prenoms', 'nom prenom', 'noms et prenoms', 'nom complet'],
+    classe: ['classe'],
+    telephone: ['telephone', 'telephone1', 'téléphone', 'contact', 'contactdesparents', 'contact des parents', 'tel', 'numero', 'numerotelephone', 'contactpere', 'contact pere', 'contact père'],
+    telephone2: ['telephone2', 'téléphone2', 'contactmere', 'contact mere', 'contact mère'],
+    statut: ['statut', 'affectation'],
+  };
+
+  function stripAccents(s) {
+    return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  }
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function normKey(s) {
+    return stripAccents(String(s || '')).toLowerCase().replace(/[\s_]+/g, ' ').trim();
+  }
+  function matchHeader(key) {
+    const nk = normKey(key).replace(/\s+/g, '');
+    for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
+      if (aliases.some(a => a.replace(/\s+/g, '') === nk)) return field;
+    }
+    return null;
+  }
+
+  function normalizePhone(...candidates) {
+    for (const raw of candidates) {
+      if (!raw) continue;
+      let digits = String(raw).replace(/\D/g, '');
+      if (!digits) continue;
+      if (digits.startsWith('00')) digits = digits.slice(2); // préfixe international 00
+      if (digits.startsWith('225')) digits = digits.slice(3); // indicatif Côte d'Ivoire
+      if (digits.length === 9) digits = '0' + digits; // le 0 initial a été perdu (Excel, saisie, etc.)
+      if (digits.length === 10 && digits.startsWith('0')) return digits;
+      // best-effort fallback: keep whatever digits we found, don't invent data
+      if (digits.length >= 8) return digits;
+    }
+    return '';
+  }
+
+  function findHeaderRowFlat(rows) {
+    // rows: array of arrays. Find the row where recognizable headers appear.
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+      const mapped = rows[i].map(matchHeader).filter(Boolean);
+      if ((mapped.includes('nom') || mapped.includes('nomcomplet')) && (mapped.includes('classe') || mapped.includes('telephone'))) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // "ABE YAMKE EUNICE JESIMIEL" -> nom="ABE", prenom="YAMKE EUNICE JESIMIEL" (1er mot = nom de famille,
+  // convention la plus courante dans ces listes ; à corriger à la main si besoin dans l'aperçu)
+  function splitNomComplet(full) {
+    const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length <= 1) return { nom: full || '', prenom: '' };
+    return { nom: parts[0], prenom: parts.slice(1).join(' ') };
+  }
+
+  function bestGuessHeaderRowIdx(rows) {
+    let bestRow = 0, bestScore = -1;
+    for (let i = 0; i < Math.min(rows.length, 15); i++) {
+      const score = (rows[i] || []).filter(c => c !== undefined && c !== null && String(c).trim() !== '').length;
+      if (score > bestScore) { bestScore = score; bestRow = i; }
+    }
+    return bestRow;
+  }
+
+  // Détection fiable (déterministe) : cherche une ligne d'en-tête reconnaissable via les alias
+  // connus, complète la classe si elle est dans une colonne finale sans en-tête.
+  // Retourne null si aucune ligne d'en-tête certaine n'a pu être identifiée.
+  function detectMapping(rows) {
+    const headerIdx = findHeaderRowFlat(rows);
+    if (headerIdx === -1) return null;
+    const header = rows[headerIdx];
+    const colIdx = {};
+    header.forEach((h, i) => {
+      const f = matchHeader(h);
+      if (f && !(f in colIdx)) colIdx[f] = i;
+    });
+    // certains exports mettent la classe dans une DERNIÈRE colonne sans en-tête (valeur répétée
+    // sur chaque ligne) plutôt que dans une colonne "classe" nommée -> on la détecte ici.
+    if (!('classe' in colIdx)) {
+      const usedIdx = new Set(Object.values(colIdx));
+      const firstDataRow = rows[headerIdx + 1] || [];
+      for (let ci = header.length - 1; ci >= 0; ci--) {
+        if (usedIdx.has(ci)) continue;
+        const sample = firstDataRow[ci];
+        if (sample !== undefined && sample !== null && String(sample).trim() !== '') {
+          colIdx.classe = ci;
+          break;
+        }
+      }
+    }
+    return { headerIdx, colIdx };
+  }
+
+  // Suggestion "molle" (utilisée pour pré-remplir le mapping manuel / la case IA) : essaie de
+  // deviner même quand detectMapping() n'est pas assez sûr pour s'appliquer automatiquement.
+  function guessMapping(rows) {
+    const headerIdx = bestGuessHeaderRowIdx(rows);
+    const header = rows[headerIdx] || [];
+    const colIdx = {};
+    header.forEach((h, i) => {
+      const f = matchHeader(h);
+      if (f && !(f in colIdx)) colIdx[f] = i;
+    });
+    return { headerIdx, colIdx };
+  }
+
+  // Applique un mapping {headerIdx, colIdx} (automatique, manuel ou suggéré par l'IA) pour produire
+  // les lignes unifiées {matricule,nom,prenom,classe,telephone,statut}.
+  function buildRowsFromMapping(rows, mapping, sheetTitle) {
+    const { headerIdx, colIdx } = mapping;
+    const hasClasseCol = 'classe' in colIdx;
+    const hasNomComplet = 'nomcomplet' in colIdx && !('nom' in colIdx);
+    const out = [];
+    for (let r = headerIdx + 1; r < rows.length; r++) {
+      const row = rows[r];
+      if (!row || row.every(c => c === undefined || c === null || String(c).trim() === '')) continue;
+      const get = (f) => (f in colIdx && row[colIdx[f]] !== undefined && row[colIdx[f]] !== null) ? String(row[colIdx[f]]).trim() : '';
+      let nom, prenom;
+      if (hasNomComplet) {
+        const split = splitNomComplet(get('nomcomplet'));
+        nom = split.nom; prenom = split.prenom;
+      } else {
+        nom = get('nom'); prenom = get('prenom');
+      }
+      if (!nom) continue; // skip fully blank student rows
+      out.push({
+        matricule: get('matricule'),
+        nom: nom,
+        prenom: prenom,
+        classe: hasClasseCol ? get('classe') : (sheetTitle || ''),
+        telephone: normalizePhone(get('telephone'), get('telephone2')),
+        statut: get('statut').toUpperCase(),
+      });
+    }
+    return out;
+  }
+
+  // Chemin complet automatique : null si aucune ligne d'en-tête fiable n'a été trouvée
+  // (dans ce cas, le fichier passe par le filet de sécurité manuel / IA — voir processFiles).
+  function extractRows(rows, sheetTitle) {
+    const mapping = detectMapping(rows);
+    if (!mapping) return null;
+    return buildRowsFromMapping(rows, mapping, sheetTitle);
+  }
+
+  function sheetToAOA(ws) {
+    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  }
+
+  const state = {
+    fileNames: [],
+    rows: [],
+    excludeNaff: false,
+    excludeAff: false,
+    excludePhoneMissing: false,
+    excludePhoneHas: false,
+    upperCase: true,
+    includeMatricule: true,
+    hasMatricule: false,
+    classMap: {},
+    customName: '',
+    overrides: {}, // { [rowId]: { nom?, prenom?, classe?, telephone?, matricule? } } — corrections manuelles
+    pendingTables: [],
+  };
+
+  function render() {
+    const scrollBoxBefore = document.getElementById('ep-scroll');
+    const savedScrollTop = scrollBoxBefore ? scrollBoxBefore.scrollTop : 0;
+
+    const distinctClasses = [...new Set(state.rows.map(r => r.classe).filter(Boolean))].sort();
+    state.hasMatricule = state.rows.some(r => r.matricule);
+    const processed = state.rows
+      .filter(r => !(state.excludeNaff && r.statut === 'NAFF') && !(state.excludeAff && r.statut === 'AFF'))
+      .filter(r => !(state.excludePhoneMissing && !r.telephone) && !(state.excludePhoneHas && r.telephone))
+      .map(r => {
+        const base = {
+          id: r.id,
+          matricule: r.matricule || '',
+          nom: state.upperCase ? r.nom.toUpperCase() : r.nom,
+          prenom: state.upperCase ? r.prenom.toUpperCase() : r.prenom,
+          classe: state.classMap[r.classe] !== undefined ? state.classMap[r.classe] : r.classe,
+          telephone: r.telephone,
+        };
+        const ov = state.overrides[r.id];
+        return ov ? Object.assign(base, ov) : base;
+      });
+
+    const missingPhone = processed.filter(r => !r.telephone).length;
+    const missingClasse = processed.filter(r => !r.classe).length;
+    const naffCount = state.rows.filter(r => r.statut === 'NAFF').length;
+    const affCount = state.rows.filter(r => r.statut === 'AFF').length;
+    const validPhone = processed.filter(r => r.telephone.length === 10).length;
+    const oddPhone = processed.filter(r => r.telephone && r.telephone.length !== 10).length;
+
+    const dupKeys = {};
+    processed.forEach(r => {
+      const k = (r.nom + '|' + r.prenom).trim();
+      if (!k.trim().replace('|','')) return;
+      dupKeys[k] = (dupKeys[k] || 0) + 1;
+    });
+    const duplicates = Object.values(dupKeys).filter(c => c > 1).length;
+
+    const byClasse = {};
+    processed.forEach(r => {
+      const key = r.classe || '(sans classe)';
+      if (!byClasse[key]) byClasse[key] = { total: 0, sansTel: 0 };
+      byClasse[key].total++;
+      if (!r.telephone) byClasse[key].sansTel++;
+    });
+    const classeRows = Object.entries(byClasse).sort((a, b) => b[1].total - a[1].total);
+
+    root.innerHTML = `
+      <div class="ep-hero">
+        <div class="ep-h1">Formateur de bases élèves</div>
+        <div class="ep-sub">Glissez un export d'école (CSV ou Excel) — il ressort en nom, prenom, classe, telephone, prêt pour l'import EcolePay.</div>
+        <div class="ep-drop" id="ep-dropzone">
+          <input type="file" id="ep-file" accept=".csv,.xlsx,.xls" multiple />
+          <div class="ep-drop-label">${state.fileNames.length ? `<b>${state.fileNames.length} fichier(s)</b> chargé(s) : ${state.fileNames.join(', ')} — cliquez pour recommencer` : '<b>Cliquez</b> ou déposez un ou plusieurs fichiers .csv / .xlsx ici (une école qui envoie un fichier par classe : sélectionnez-les tous)'}</div>
+        </div>
+      </div>
+
+      ${state.pendingTables.length ? state.pendingTables.map(pt => {
+        const header = pt.aoa[pt.headerIdx] || [];
+        const previewRows = pt.aoa.slice(pt.headerIdx, pt.headerIdx + 4);
+        const ncols = Math.max(header.length, 1, ...previewRows.map(r => (r || []).length));
+        const invColIdx = {};
+        Object.entries(pt.colIdx).forEach(([f, ci]) => { invColIdx[ci] = f; });
+        return `
+        <div class="ep-card" style="border-left-color: var(--ep-amber); background: var(--ep-amber-bg); border-color: var(--ep-amber-border);">
+          <div class="ep-h1" style="font-size:14px; color: var(--ep-amber);">⚠ ${escapeHtml(pt.source)}</div>
+          <div class="ep-sub">Format non reconnu automatiquement. Vérifiez/ajustez la ligne d'en-tête et le rôle de chaque colonne ci-dessous.</div>
+          <div class="ep-row" style="margin-bottom:10px;">
+            <label style="font-size:13px;">Ligne d'en-tête (0 = première ligne) :
+              <input type="number" min="0" max="${Math.max(0, pt.aoa.length - 1)}" value="${pt.headerIdx}" data-pt="${pt.uid}" class="ep-select ep-headerrow-input" style="width:60px;margin-left:6px;" />
+            </label>
+            <button class="ep-btn ai ep-ai-btn" data-pt="${pt.uid}" ${pt.aiLoading ? 'disabled' : ''}>${pt.aiLoading ? 'Analyse en cours…' : '✨ Suggestion IA'}</button>
+          </div>
+          ${pt.aiError ? `<div class="ep-sub" style="color:#A32D2D;">${escapeHtml(pt.aiError)}</div>` : ''}
+          <div class="ep-scroll" style="max-height:220px;">
+            <table class="ep-table">
+              <thead><tr>
+                ${Array.from({ length: ncols }).map((_, ci) => `
+                  <th><select class="ep-select ep-colmap-select" data-pt="${pt.uid}" data-ci="${ci}">
+                    ${FIELD_OPTIONS.map(o => `<option value="${o.value}" ${invColIdx[ci] === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}
+                  </select></th>
+                `).join('')}
+              </tr></thead>
+              <tbody>
+                ${previewRows.map(row => `<tr>${Array.from({ length: ncols }).map((_, ci) => `<td>${escapeHtml((row || [])[ci])}</td>`).join('')}</tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div class="ep-row" style="justify-content: flex-end; margin-top: 10px;">
+            <button class="ep-btn ep-validate-mapping-btn" data-pt="${pt.uid}">Valider ce mapping</button>
+          </div>
+        </div>
+        `;
+      }).join('') : ''}
+
+      ${state.rows.length ? `
+      <div class="ep-card ep-accent-blue">
+        <div class="ep-row" style="justify-content: space-between;">
+          <div class="ep-row">
+            <label class="ep-toggle"><input type="checkbox" id="ep-naff" ${state.excludeNaff ? 'checked' : ''}/> Exclure les élèves non affectés (NAFF) — ${naffCount} trouvé(s)</label>
+            <label class="ep-toggle"><input type="checkbox" id="ep-aff" ${state.excludeAff ? 'checked' : ''}/> Exclure les élèves affectés (AFF) — ${affCount} trouvé(s)</label>
+            <label class="ep-toggle"><input type="checkbox" id="ep-phone-missing" ${state.excludePhoneMissing ? 'checked' : ''}/> Exclure les élèves sans téléphone — ${state.rows.filter(r => !r.telephone).length} trouvé(s)</label>
+            <label class="ep-toggle"><input type="checkbox" id="ep-phone-has" ${state.excludePhoneHas ? 'checked' : ''}/> Exclure les élèves avec téléphone — ${state.rows.filter(r => r.telephone).length} trouvé(s)</label>
+            <label class="ep-toggle"><input type="checkbox" id="ep-upper" ${state.upperCase ? 'checked' : ''}/> Nom/prénom en MAJUSCULES</label>
+            ${state.hasMatricule ? `<label class="ep-toggle"><input type="checkbox" id="ep-matricule" ${state.includeMatricule ? 'checked' : ''}/> Inclure la colonne matricule <span class="ep-badge">trouvée dans le fichier</span></label>` : ''}
+          </div>
+        </div>
+        <div class="ep-stats">
+          <div class="ep-stat"><div class="ep-stat-num">${processed.length}</div><div class="ep-stat-label">profils prêts</div></div>
+          <div class="ep-stat"><div class="ep-stat-num">${distinctClasses.length}</div><div class="ep-stat-label">classes distinctes</div></div>
+          <div class="ep-stat good"><div class="ep-stat-num">${validPhone}</div><div class="ep-stat-label">téléphone valide (10 ch.)</div></div>
+          <div class="ep-stat ${oddPhone ? 'warn' : ''}"><div class="ep-stat-num">${oddPhone}</div><div class="ep-stat-label">téléphone à vérifier</div></div>
+          <div class="ep-stat ${missingPhone ? 'warn' : ''}"><div class="ep-stat-num">${missingPhone} <span style="font-size:12px;color:var(--text-secondary,#6b6a64);">(${processed.length ? Math.round(missingPhone/processed.length*100) : 0}%)</span></div><div class="ep-stat-label">sans téléphone</div></div>
+          <div class="ep-stat ${missingClasse ? 'warn' : ''}"><div class="ep-stat-num">${missingClasse}</div><div class="ep-stat-label">sans classe</div></div>
+          <div class="ep-stat ${duplicates ? 'warn' : ''}"><div class="ep-stat-num">${duplicates}</div><div class="ep-stat-label">doublons potentiels (nom+prénom)</div></div>
+        </div>
+      </div>
+
+      ${classeRows.length ? `
+      <div class="ep-card ep-accent-teal">
+        <div class="ep-h1" style="font-size:14px; color: var(--ep-teal);">Effectif par classe</div>
+        <div class="ep-sub">${classeRows.length} classe(s) — triées par effectif décroissant.</div>
+        <div class="ep-scroll" style="max-height:280px;">
+          <table class="ep-table">
+            <thead><tr><th>classe</th><th>effectif</th><th>sans téléphone</th></tr></thead>
+            <tbody>
+              ${classeRows.map(([classe, s]) => `
+                <tr>
+                  <td>${classe}</td>
+                  <td>${s.total}</td>
+                  <td>${s.sansTel ? `${s.sansTel} <span style="color:var(--text-secondary,#6b6a64);">(${Math.round(s.sansTel/s.total*100)}%)</span>` : '0'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      ` : ''}
+
+      ${distinctClasses.length ? `
+      <div class="ep-card ep-accent-violet">
+        <div class="ep-h1" style="font-size:14px; color: var(--ep-violet);">Renommer des classes (optionnel)</div>
+        <div class="ep-sub">Pour faire correspondre exactement aux classes déjà créées sur le dashboard de l'école. Laissez vide pour garder tel quel.</div>
+        <div id="ep-classmap">
+          ${distinctClasses.map(c => `
+            <div class="ep-mapping-row">
+              <input type="text" value="${c.replace(/"/g,'&quot;')}" disabled />
+              <span class="arrow">→</span>
+              <input type="text" data-src="${c.replace(/"/g,'&quot;')}" placeholder="${c.replace(/"/g,'&quot;')}" value="${(state.classMap[c] ?? '').replace(/"/g,'&quot;')}" />
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
+
+      <div class="ep-card ep-accent-green">
+        <div class="ep-h1" style="font-size:14px; margin:0; color: var(--ep-green);">Aperçu (${processed.length} lignes)</div>
+        <div class="ep-edit-hint">Cliquez sur une cellule pour corriger une valeur — le fichier téléchargé reflète vos corrections.</div>
+        <div class="ep-row" style="justify-content: flex-end; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+          <div class="ep-row">
+            <input type="text" id="ep-filename-input" value="${(state.customName || (baseName() + '_FORMATE')).replace(/"/g,'&quot;')}" class="ep-select" style="width:220px;" placeholder="nom du fichier" />
+            <button class="ep-btn secondary" id="ep-dl-xlsx">Télécharger .xlsx</button>
+            <button class="ep-btn" id="ep-dl-csv">Télécharger .csv</button>
+          </div>
+        </div>
+        <div class="ep-scroll" id="ep-scroll">
+          <table class="ep-table">
+            <thead><tr>${state.hasMatricule && state.includeMatricule ? '<th>matricule</th>' : ''}<th>nom</th><th>prenom</th><th>classe</th><th>telephone</th></tr></thead>
+            <tbody>
+              ${processed.map(r => {
+                const ov = state.overrides[r.id] || {};
+                const cell = (field) => {
+                  const val = r[field];
+                  const edited = field in ov;
+                  return `<td contenteditable="true" spellcheck="false" data-id="${r.id}" data-field="${field}" class="${edited ? 'ep-edited' : ''}">${escapeHtml(val)}</td>`;
+                };
+                return `
+                <tr>
+                  ${state.hasMatricule && state.includeMatricule ? cell('matricule') : ''}
+                  ${cell('nom')}
+                  ${cell('prenom')}
+                  ${cell('classe')}
+                  ${cell('telephone')}
+                </tr>
+              `;}).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      ` : ''}
+    `;
+
+    document.getElementById('ep-dropzone').onclick = () => document.getElementById('ep-file').click();
+    document.getElementById('ep-file').onchange = handleFile;
+    const dz = document.getElementById('ep-dropzone');
+    dz.ondragover = (e) => { e.preventDefault(); dz.classList.add('drag'); };
+    dz.ondragleave = () => dz.classList.remove('drag');
+    dz.ondrop = (e) => {
+      e.preventDefault(); dz.classList.remove('drag');
+      if (e.dataTransfer.files.length) processFiles(Array.from(e.dataTransfer.files));
+    };
+
+    const naffEl = document.getElementById('ep-naff');
+    if (naffEl) naffEl.onchange = (e) => { state.excludeNaff = e.target.checked; render(); };
+    const affEl = document.getElementById('ep-aff');
+    if (affEl) affEl.onchange = (e) => { state.excludeAff = e.target.checked; render(); };
+    const phoneMissingEl = document.getElementById('ep-phone-missing');
+    if (phoneMissingEl) phoneMissingEl.onchange = (e) => { state.excludePhoneMissing = e.target.checked; render(); };
+    const phoneHasEl = document.getElementById('ep-phone-has');
+    if (phoneHasEl) phoneHasEl.onchange = (e) => { state.excludePhoneHas = e.target.checked; render(); };
+    const upperEl = document.getElementById('ep-upper');
+    if (upperEl) upperEl.onchange = (e) => { state.upperCase = e.target.checked; render(); };
+    const matEl = document.getElementById('ep-matricule');
+    if (matEl) matEl.onchange = (e) => { state.includeMatricule = e.target.checked; render(); };
+    const nameEl = document.getElementById('ep-filename-input');
+    if (nameEl) nameEl.oninput = (e) => { state.customName = e.target.value; };
+
+    const mapInputs = document.querySelectorAll('#ep-classmap input[data-src]');
+    mapInputs.forEach(inp => {
+      inp.onblur = (e) => {
+        const src = e.target.getAttribute('data-src');
+        const val = e.target.value.trim();
+        if (val) state.classMap[src] = val; else delete state.classMap[src];
+        render();
+      };
+    });
+
+    document.querySelectorAll('.ep-headerrow-input').forEach(inp => {
+      inp.onchange = (e) => {
+        const uid = e.target.getAttribute('data-pt');
+        const pt = state.pendingTables.find(p => p.uid === uid);
+        if (!pt) return;
+        const newIdx = Math.max(0, Math.min(pt.aoa.length - 1, parseInt(e.target.value, 10) || 0));
+        pt.headerIdx = newIdx;
+        const colIdx = {};
+        (pt.aoa[newIdx] || []).forEach((h, i) => { const f = matchHeader(h); if (f && !(f in colIdx)) colIdx[f] = i; });
+        pt.colIdx = colIdx;
+        render();
+      };
+    });
+
+    document.querySelectorAll('.ep-ai-btn').forEach(btn => {
+      btn.onclick = async (e) => {
+        const uid = e.target.getAttribute('data-pt');
+        const pt = state.pendingTables.find(p => p.uid === uid);
+        if (!pt) return;
+        pt.aiLoading = true; pt.aiError = '';
+        render();
+        try {
+          const result = await suggestMappingViaAI(pt.aoa);
+          pt.headerIdx = result.headerIdx;
+          pt.colIdx = result.colIdx;
+        } catch (err) {
+          pt.aiError = 'Suggestion IA indisponible (' + err.message + '). Assignez les colonnes manuellement ci-dessous.';
+        }
+        pt.aiLoading = false;
+        render();
+      };
+    });
+
+    document.querySelectorAll('.ep-validate-mapping-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        const uid = e.target.getAttribute('data-pt');
+        const pt = state.pendingTables.find(p => p.uid === uid);
+        if (!pt) return;
+        const colIdx = {};
+        document.querySelectorAll(`.ep-colmap-select[data-pt="${uid}"]`).forEach(sel => {
+          const ci = parseInt(sel.getAttribute('data-ci'), 10);
+          const val = sel.value;
+          if (val) colIdx[val] = ci;
+        });
+        if (!('nom' in colIdx) && !('nomcomplet' in colIdx)) {
+          alert('Choisissez au moins une colonne "Nom" ou "Nom + Prénom" avant de valider.');
+          return;
+        }
+        const newRows = buildRowsFromMapping(pt.aoa, { headerIdx: pt.headerIdx, colIdx }, pt.sheetTitle);
+        const startId = state.rows.length ? Math.max(...state.rows.map(r => r.id)) + 1 : 0;
+        newRows.forEach((r, i) => r.id = startId + i);
+        state.rows = state.rows.concat(newRows);
+        state.pendingTables = state.pendingTables.filter(p => p.uid !== uid);
+        render();
+      };
+    });
+
+    const dlCsv = document.getElementById('ep-dl-csv');
+    if (dlCsv) dlCsv.onclick = () => downloadCsv(processed);
+    const dlXlsx = document.getElementById('ep-dl-xlsx');
+    if (dlXlsx) dlXlsx.onclick = () => downloadXlsx(processed);
+
+    const scrollBox = document.getElementById('ep-scroll');
+    if (scrollBox) {
+      scrollBox.scrollTop = savedScrollTop;
+      scrollBox.addEventListener('focusout', (e) => {
+        const td = e.target.closest('td[data-field]');
+        if (!td) return;
+        const id = td.getAttribute('data-id');
+        const field = td.getAttribute('data-field');
+        const value = td.textContent.trim();
+        if (!state.overrides[id]) state.overrides[id] = {};
+        state.overrides[id][field] = value;
+        render();
+      });
+      scrollBox.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target.closest('td[data-field]')) {
+          e.preventDefault();
+          e.target.blur();
+        }
+      });
+    }
+  }
+
+  const FIELD_OPTIONS = [
+    { value: '', label: '— ignorer —' },
+    { value: 'matricule', label: 'Matricule' },
+    { value: 'nom', label: 'Nom (colonne séparée)' },
+    { value: 'prenom', label: 'Prénom (colonne séparée)' },
+    { value: 'nomcomplet', label: 'Nom + Prénom (une seule colonne)' },
+    { value: 'classe', label: 'Classe' },
+    { value: 'telephone', label: 'Téléphone (principal)' },
+    { value: 'telephone2', label: 'Téléphone (secondaire)' },
+    { value: 'statut', label: 'Statut (AFF/NAFF)' },
+  ];
+  const VALID_FIELDS = new Set(FIELD_OPTIONS.map(o => o.value).filter(Boolean));
+
+  // Demande à Claude d'identifier la ligne d'en-tête et le rôle de chaque colonne quand la
+  // détection déterministe échoue (format jamais vu). Utilisé comme pré-remplissage suggéré —
+  // l'utilisateur valide toujours manuellement avant que les données soient utilisées.
+  async function suggestMappingViaAI(aoa) {
+    const sample = aoa.slice(0, 15).map((row, i) => `L${i}: ` + (row || []).map(c => (c === undefined || c === null || c === '') ? '·' : String(c)).join(' | ')).join('\n');
+    const prompt = `Voici les 15 premières lignes d'un export d'élèves d'une école ivoirienne (colonnes séparées par " | ", cellule vide notée "·").
+
+${sample}
+
+Identifie :
+1. L'index de la ligne d'en-tête (0-indexé). Si les données n'ont pas de ligne d'en-tête (aucun mot descriptif), renvoie -1 et considère la colonne 0 comme la ligne 0 des données.
+2. Pour CHAQUE index de colonne présent dans la ligne d'en-tête (ou dans la ligne 0 s'il n'y a pas d'en-tête), le champ auquel elle correspond parmi EXACTEMENT ces valeurs : "matricule", "nom" (nom de famille seul), "prenom" (prénom(s) seul), "nomcomplet" (nom ET prénom dans la même colonne), "classe", "telephone" (numéro principal), "telephone2" (numéro secondaire), "statut" (affecté/non affecté), ou null si la colonne ne correspond à rien d'utile (sexe, date de naissance, lieu de naissance, numéro de ligne, etc.).
+
+Si aucune colonne ne contient la classe mais qu'une valeur identique se répète sur toutes les lignes dans une colonne sans en-tête clair, c'est probablement la classe.
+
+Réponds UNIQUEMENT avec un objet JSON strictement de cette forme, sans texte autour, sans balises markdown :
+{"headerRowIndex": <entier>, "columns": {"<indexColonne>": "<champ ou null>", ...}}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 25000);
+    let data;
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      data = await response.json();
+    } finally {
+      clearTimeout(timeout);
+    }
+    const text = (data.content || []).map(b => b.text || '').join('').trim();
+    const cleaned = text.replace(/^```json\s*|^```\s*|```$/g, '').trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      throw new Error('réponse IA illisible');
+    }
+    const headerIdx = Number.isInteger(parsed.headerRowIndex) && parsed.headerRowIndex >= 0 ? parsed.headerRowIndex : 0;
+    const colIdx = {};
+    Object.entries(parsed.columns || {}).forEach(([ciStr, field]) => {
+      const ci = parseInt(ciStr, 10);
+      if (!Number.isNaN(ci) && VALID_FIELDS.has(field) && !(field in colIdx)) colIdx[field] = ci;
+    });
+    if (Object.keys(colIdx).length === 0) throw new Error('aucune colonne identifiée');
+    return { headerIdx, colIdx };
+  }
+
+  function handleFile(e) {
+    if (e.target.files.length) processFiles(Array.from(e.target.files));
+  }
+
+  function readFileAsRows(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    const fileBaseName = file.name.replace(/\.[^.]+$/, '');
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = reject;
+      if (ext === 'csv') {
+        reader.onload = (e) => {
+          const parsed = Papa.parse(e.target.result, { delimiter: '', skipEmptyLines: true });
+          const rows = extractRows(parsed.data, fileBaseName);
+          resolve({
+            rows: rows || [],
+            pending: rows ? [] : [{ source: file.name, aoa: parsed.data, sheetTitle: fileBaseName }],
+          });
+        };
+        reader.readAsText(file, 'UTF-8');
+      } else {
+        reader.onload = (e) => {
+          const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: false });
+          let rows = [];
+          const pending = [];
+          wb.SheetNames.forEach(name => {
+            const aoa = sheetToAOA(wb.Sheets[name]);
+            const sheetTitle = wb.SheetNames.length > 1 ? name : fileBaseName;
+            const extracted = extractRows(aoa, sheetTitle);
+            if (extracted) rows = rows.concat(extracted);
+            else pending.push({ source: `${file.name} — feuille "${name}"`, aoa, sheetTitle });
+          });
+          resolve({ rows, pending });
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  }
+
+  async function processFiles(files) {
+    state.fileNames = files.map(f => f.name);
+    state.customName = '';
+    const results = await Promise.all(files.map(readFileAsRows));
+    state.rows = [].concat(...results.map(r => r.rows));
+    const rawPending = [].concat(...results.map(r => r.pending));
+    state.pendingTables = rawPending.map((p, i) => {
+      const guess = guessMapping(p.aoa);
+      return { uid: 'pt' + i, source: p.source, aoa: p.aoa, sheetTitle: p.sheetTitle, headerIdx: guess.headerIdx, colIdx: guess.colIdx, aiTried: false, aiError: '' };
+    });
+    state.rows.forEach((r, i) => r.id = i);
+    state.classMap = {};
+    state.overrides = {};
+    render();
+  }
+
+  function toCsvValue(v) {
+    if (v == null) return '';
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function downloadCsv(rows) {
+    const cols = (state.hasMatricule && state.includeMatricule) ? ['matricule', 'nom', 'prenom', 'classe', 'telephone'] : ['nom', 'prenom', 'classe', 'telephone'];
+    const lines = [cols.join(',')];
+    rows.forEach(r => lines.push(cols.map(c => toCsvValue(r[c])).join(',')));
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    triggerDownload(blob, outputName() + '.csv');
+  }
+
+  function downloadXlsx(rows) {
+    const cols = (state.hasMatricule && state.includeMatricule) ? ['matricule', 'nom', 'prenom', 'classe', 'telephone'] : ['nom', 'prenom', 'classe', 'telephone'];
+    const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'eleves');
+    const out = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    triggerDownload(new Blob([out], { type: 'application/octet-stream' }), outputName() + '.xlsx');
+  }
+
+  function outputName() {
+    const raw = (state.customName || (baseName() + '_FORMATE')).trim();
+    return (raw.replace(/\.(csv|xlsx|xls)$/i, '') || 'export_formate').replace(/[\\/:*?"<>|]/g, '-');
+  }
+
+  function baseName() {
+    if (!state.fileNames.length) return 'export';
+    if (state.fileNames.length === 1) return state.fileNames[0].replace(/\.[^.]+$/, '');
+    return `import_${state.fileNames.length}fichiers`;
+  }
+
+  function triggerDownload(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  render();
+  } // fin runApp
+})();
+</script>
+</body>
+</html>
