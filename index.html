@@ -11,6 +11,8 @@
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <style>
   #ep-root {
     --ep-navy: #0B3D5C;
@@ -96,17 +98,9 @@
   }
 
   function runApp() {
-  const HEADER_ALIASES = {
-    matricule: ['matricule', 'mat', 'id'],
-    nom: ['nom'],
-    prenom: ['prenom', 'prenoms', 'prénom', 'prénoms'],
-    nomcomplet: ['nom et prenoms', 'nom et prenom', 'nom prenoms', 'nom prenom', 'noms et prenoms', 'nom complet'],
-    classe: ['classe'],
-    telephone: ['telephone', 'telephone1', 'téléphone', 'contact', 'contactdesparents', 'contact des parents', 'tel', 'numero', 'numerotelephone', 'contactpere', 'contact pere', 'contact père'],
-    telephone2: ['telephone2', 'téléphone2', 'contactmere', 'contact mere', 'contact mère'],
-    statut: ['statut', 'affectation'],
-  };
-
+  // Détection de colonnes par MOTS-CLÉS plutôt que par liste exacte d'en-têtes : beaucoup plus
+  // robuste face aux variantes qu'on ne peut pas toutes prévoir ("No matricule", "Mle Ecole",
+  // "N° matricule", "Nom et contact du parent ou tuteur", etc.).
   function stripAccents(s) {
     return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
   }
@@ -116,27 +110,93 @@
   function normKey(s) {
     return stripAccents(String(s || '')).toLowerCase().replace(/[\s_]+/g, ' ').trim();
   }
+  // découpe un en-tête en mots normalisés, en séparant aussi lettres et chiffres collés
+  // ("telephone2" -> "telephone 2") pour ne pas rater les suffixes numériques.
+  function wordsOf(s) {
+    const norm = stripAccents(String(s || '')).toLowerCase().replace(/([a-z])(\d)/g, '$1 $2').replace(/[^a-z0-9]+/g, ' ').trim();
+    return norm ? norm.split(' ').filter(Boolean) : [];
+  }
   function matchHeader(key) {
-    const nk = normKey(key).replace(/\s+/g, '');
-    for (const [field, aliases] of Object.entries(HEADER_ALIASES)) {
-      if (aliases.some(a => a.replace(/\s+/g, '') === nk)) return field;
+    const words = wordsOf(key);
+    if (!words.length) return null;
+    const has = (list) => list.some(w => words.includes(w));
+    const hasNom = has(['nom', 'noms']);
+    const hasPrenom = has(['prenom', 'prenoms']);
+    if (has(['matricule', 'mle', 'mat'])) return 'matricule';
+    if (has(['classe'])) return 'classe';
+    if (hasNom && hasPrenom) return 'nomcomplet';
+    // contact/téléphone AVANT le simple "nom" isolé : une colonne comme "Nom et contact du
+    // parent" contient le mot "nom" mais désigne bien un numéro de téléphone, pas un 2e nom.
+    if (has(['telephone', 'tel', 'contact', 'parent', 'parents', 'tuteur', 'pere', 'mere', 'numero'])) {
+      return has(['mere', 'secondaire']) || words.includes('2') ? 'telephone2' : 'telephone';
     }
+    if (has(['statut', 'affectation', 'affecte'])) return 'statut';
+    if (hasNom) return 'nom';
+    if (hasPrenom) return 'prenom';
     return null;
   }
 
+  // Extrait des groupes de chiffres consécutifs (8 à 13 chiffres, espaces/points/tirets isolés
+  // tolérés à l'intérieur) d'un texte libre — utile quand la colonne contact mélange nom du
+  // parent et numéro ("PEPE 0709362362/ MEME 0505608712" -> deux numéros distincts, pas un seul
+  // bloc de 20 chiffres).
+  function extractDigitGroups(raw) {
+    if (!raw) return [];
+    // tolère aussi les tirets cadratin/demi-cadratin (— –), fréquents par coquille ou correction
+    // automatique du clavier, en plus de l'espace, du point et du tiret simple.
+    const matches = String(raw).match(/\d(?:[\s.\-–—]?\d){6,12}/g) || [];
+    return matches.map(m => m.replace(/\D/g, ''));
+  }
+  function normalizeOneNumber(digits) {
+    if (digits.startsWith('00')) digits = digits.slice(2); // préfixe international
+    if (digits.startsWith('225')) digits = digits.slice(3); // indicatif Côte d'Ivoire
+    if (digits.length === 9) digits = '0' + digits; // le 0 initial a été perdu
+    if (digits.length === 10 && digits.startsWith('0')) return digits;
+    if (digits.length >= 8) return digits; // best-effort, à vérifier manuellement
+    return null;
+  }
   function normalizePhone(...candidates) {
+    // 1ère passe : cherche un numéro parfaitement valide (10 chiffres) dans n'importe quel candidat
     for (const raw of candidates) {
-      if (!raw) continue;
-      let digits = String(raw).replace(/\D/g, '');
-      if (!digits) continue;
-      if (digits.startsWith('00')) digits = digits.slice(2); // préfixe international 00
-      if (digits.startsWith('225')) digits = digits.slice(3); // indicatif Côte d'Ivoire
-      if (digits.length === 9) digits = '0' + digits; // le 0 initial a été perdu (Excel, saisie, etc.)
-      if (digits.length === 10 && digits.startsWith('0')) return digits;
-      // best-effort fallback: keep whatever digits we found, don't invent data
-      if (digits.length >= 8) return digits;
+      for (const g of extractDigitGroups(raw)) {
+        const norm = normalizeOneNumber(g);
+        if (norm && norm.length === 10) return norm;
+      }
+    }
+    // 2e passe : à défaut, accepte le meilleur résultat approximatif trouvé
+    for (const raw of candidates) {
+      for (const g of extractDigitGroups(raw)) {
+        const norm = normalizeOneNumber(g);
+        if (norm) return norm;
+      }
     }
     return '';
+  }
+
+  // Comme normalizePhone, mais ressort JUSQU'À DEUX numéros distincts au lieu d'un seul : le
+  // 1er candidat (colonne "telephone") est examiné en premier, puis le 2e (colonne "telephone2")
+  // — chacun peut lui-même contenir plusieurs numéros collés dans un même champ de contact libre
+  // ("PEPE 0709362362/ MEME 0505608712"). Les doublons exacts sont fusionnés.
+  function extractTwoPhones(primaryRaw, secondaryRaw) {
+    const found = [];
+    [primaryRaw, secondaryRaw].forEach(raw => {
+      extractDigitGroups(raw).forEach(g => {
+        const norm = normalizeOneNumber(g);
+        if (norm && !found.includes(norm)) found.push(norm);
+      });
+    });
+    return { telephone: found[0] || '', telephone2: found[1] || '' };
+  }
+
+  // Nettoie un nom de fichier / de feuille pour en tirer un nom de classe présentable quand
+  // aucune colonne "classe" n'existe (ex: "LISTE__CE1_26-27" -> "CE1",
+  // "INFOS_PARENT_1ERE_A2_1__2025-2026-706756060" -> "1ERE A2 1").
+  function cleanFilenameAsClasse(name) {
+    let s = String(name || '');
+    s = s.replace(/^(liste|infos?[_ -]?parent|export|classe)[_ -]*/i, '');
+    s = s.replace(/[_ -]+\d{2,4}([-_]\d{2,4})*([-_]\d+)?\s*$/, '');
+    s = s.replace(/[_-]+/g, ' ').trim();
+    return s || String(name || '').trim();
   }
 
   function findHeaderRowFlat(rows) {
@@ -150,12 +210,36 @@
     return -1;
   }
 
-  // "ABE YAMKE EUNICE JESIMIEL" -> nom="ABE", prenom="YAMKE EUNICE JESIMIEL" (1er mot = nom de famille,
-  // convention la plus courante dans ces listes ; à corriger à la main si besoin dans l'aperçu)
+  // Deux conventions rencontrées dans les colonnes "nom et prénoms" fusionnées :
+  // 1) tout en majuscules, ex "ABE YAMKE EUNICE JESIMIEL" -> 1er mot = nom, reste = prénom
+  // 2) NOM en majuscules suivi du Prénom en casse normale, ex "KOFFI NIEN Maffouët Pierre" ->
+  //    tous les mots en tête qui sont en majuscules = nom (même s'il y en a plusieurs),
+  //    le reste = prénom. Cette 2e convention permet de repérer un nom de famille composé.
+  // Ramène n'importe quelle valeur de statut trouvée (AFF, NAFF, Affecté, Non Affecté, vide...)
+  // à exactement "Affecté" ou "Non affecté". Vide/non précisé -> "Non affecté" par défaut.
+  function normalizeAffectation(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return 'Non affecté';
+    const norm = s.toUpperCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+    if (norm.includes('NAFF') || norm.includes('NON AFFECTE') || norm.includes('NON-AFFECTE')) return 'Non affecté';
+    if (norm.includes('AFF')) return 'Affecté';
+    return 'Non affecté';
+  }
+
   function splitNomComplet(full) {
-    const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
-    if (parts.length <= 1) return { nom: full || '', prenom: '' };
-    return { nom: parts[0], prenom: parts.slice(1).join(' ') };
+    const tokens = String(full || '').trim().split(/\s+/).filter(Boolean);
+    if (tokens.length <= 1) return { nom: full || '', prenom: '' };
+    const isAllCaps = (t) => t === t.toUpperCase() && t !== t.toLowerCase();
+    const hasMixedCase = tokens.some(t => !isAllCaps(t));
+    if (hasMixedCase) {
+      let i = 0;
+      const nomTokens = [];
+      while (i < tokens.length && isAllCaps(tokens[i])) { nomTokens.push(tokens[i]); i++; }
+      if (!nomTokens.length) { nomTokens.push(tokens[0]); i = 1; } // sécurité si aucun mot n'est en majuscules
+      return { nom: nomTokens.join(' '), prenom: tokens.slice(i).join(' ') };
+    }
+    // tout le nom est en majuscules -> pas de repère de casse, on garde l'heuristique simple
+    return { nom: tokens[0], prenom: tokens.slice(1).join(' ') };
   }
 
   function bestGuessHeaderRowIdx(rows) {
@@ -179,15 +263,19 @@
       const f = matchHeader(h);
       if (f && !(f in colIdx)) colIdx[f] = i;
     });
-    // certains exports mettent la classe dans une DERNIÈRE colonne sans en-tête (valeur répétée
-    // sur chaque ligne) plutôt que dans une colonne "classe" nommée -> on la détecte ici.
+    // certains exports mettent la classe dans une DERNIÈRE colonne SANS EN-TÊTE (valeur répétée
+    // sur chaque ligne) plutôt que dans une colonne "classe" nommée -> on la détecte ici, mais
+    // seulement si la cellule d'en-tête est vraiment vide (sinon on risque de confondre avec une
+    // colonne réelle mais non reconnue, ex: date de naissance).
     if (!('classe' in colIdx)) {
       const usedIdx = new Set(Object.values(colIdx));
-      const firstDataRow = rows[headerIdx + 1] || [];
+      const sampleRows = rows.slice(headerIdx + 1, headerIdx + 9).filter(r => r && r.some(c => String(c || '').trim() !== ''));
       for (let ci = header.length - 1; ci >= 0; ci--) {
         if (usedIdx.has(ci)) continue;
-        const sample = firstDataRow[ci];
-        if (sample !== undefined && sample !== null && String(sample).trim() !== '') {
+        const headerCell = String(header[ci] || '').trim();
+        if (headerCell !== '') continue; // en-tête non vide mais non reconnu -> pas une classe implicite
+        const values = sampleRows.map(r => String(r[ci] || '').trim()).filter(v => v !== '');
+        if (values.length >= 3 && values.every(v => v === values[0])) {
           colIdx.classe = ci;
           break;
         }
@@ -228,12 +316,14 @@
         nom = get('nom'); prenom = get('prenom');
       }
       if (!nom) continue; // skip fully blank student rows
+      const phones = extractTwoPhones(get('telephone'), get('telephone2'));
       out.push({
         matricule: get('matricule'),
         nom: nom,
         prenom: prenom,
-        classe: hasClasseCol ? get('classe') : (sheetTitle || ''),
-        telephone: normalizePhone(get('telephone'), get('telephone2')),
+        classe: hasClasseCol ? get('classe') : cleanFilenameAsClasse(sheetTitle),
+        telephone: phones.telephone,
+        telephone2: phones.telephone2,
         statut: get('statut').toUpperCase(),
       });
     }
@@ -259,9 +349,15 @@
     excludeAff: false,
     excludePhoneMissing: false,
     excludePhoneHas: false,
+    useDefaultPhone: false,
+    defaultPhoneValue: '0101010101',
     upperCase: true,
     includeMatricule: true,
     hasMatricule: false,
+    includeAffectation: true,
+    hasAffectation: false,
+    includeTelephone2: true,
+    hasTelephone2: false,
     classMap: {},
     customName: '',
     overrides: {}, // { [rowId]: { nom?, prenom?, classe?, telephone?, matricule? } } — corrections manuelles
@@ -269,13 +365,29 @@
   };
 
   function render() {
+    try {
+      renderInner();
+    } catch (err) {
+      console.error(err);
+      root.innerHTML = `<div style="font-family:sans-serif;background:#FCEBEB;border:1px solid #E24B4A;border-radius:8px;padding:16px;color:#501313;">
+        <b>Erreur d'affichage.</b><br>
+        <span style="font-size:13px;">${escapeHtml(err && err.message ? err.message : String(err))}</span><br>
+        <span style="font-size:12px;color:#712b13;">Copiez ce message et envoyez-le pour que je corrige.</span><br>
+        <button onclick="location.reload()" style="margin-top:10px;background:#185fa5;color:#fff;border:none;border-radius:6px;padding:8px 14px;cursor:pointer;">Recharger l'outil</button>
+      </div>`;
+    }
+  }
+
+  function renderInner() {
     const scrollBoxBefore = document.getElementById('ep-scroll');
     const savedScrollTop = scrollBoxBefore ? scrollBoxBefore.scrollTop : 0;
 
     const distinctClasses = [...new Set(state.rows.map(r => r.classe).filter(Boolean))].sort();
     state.hasMatricule = state.rows.some(r => r.matricule);
+    state.hasAffectation = state.rows.some(r => r.statut);
+    state.hasTelephone2 = state.rows.some(r => r.telephone2);
     const processed = state.rows
-      .filter(r => !(state.excludeNaff && r.statut === 'NAFF') && !(state.excludeAff && r.statut === 'AFF'))
+      .filter(r => !(state.excludeNaff && normalizeAffectation(r.statut) === 'Non affecté') && !(state.excludeAff && normalizeAffectation(r.statut) === 'Affecté'))
       .filter(r => !(state.excludePhoneMissing && !r.telephone) && !(state.excludePhoneHas && r.telephone))
       .map(r => {
         const base = {
@@ -284,7 +396,9 @@
           nom: state.upperCase ? r.nom.toUpperCase() : r.nom,
           prenom: state.upperCase ? r.prenom.toUpperCase() : r.prenom,
           classe: state.classMap[r.classe] !== undefined ? state.classMap[r.classe] : r.classe,
-          telephone: r.telephone,
+          telephone: r.telephone || (state.useDefaultPhone ? state.defaultPhoneValue : r.telephone),
+          telephone2: r.telephone2 || '',
+          affectation: normalizeAffectation(r.statut),
         };
         const ov = state.overrides[r.id];
         return ov ? Object.assign(base, ov) : base;
@@ -292,8 +406,8 @@
 
     const missingPhone = processed.filter(r => !r.telephone).length;
     const missingClasse = processed.filter(r => !r.classe).length;
-    const naffCount = state.rows.filter(r => r.statut === 'NAFF').length;
-    const affCount = state.rows.filter(r => r.statut === 'AFF').length;
+    const naffCount = state.rows.filter(r => normalizeAffectation(r.statut) === 'Non affecté').length;
+    const affCount = state.rows.filter(r => normalizeAffectation(r.statut) === 'Affecté').length;
     const validPhone = processed.filter(r => r.telephone.length === 10).length;
     const oddPhone = processed.filter(r => r.telephone && r.telephone.length !== 10).length;
 
@@ -319,8 +433,8 @@
         <div class="ep-h1">Formateur de bases élèves</div>
         <div class="ep-sub">Glissez un export d'école (CSV ou Excel) — il ressort en nom, prenom, classe, telephone, prêt pour l'import EcolePay.</div>
         <div class="ep-drop" id="ep-dropzone">
-          <input type="file" id="ep-file" accept=".csv,.xlsx,.xls" multiple />
-          <div class="ep-drop-label">${state.fileNames.length ? `<b>${state.fileNames.length} fichier(s)</b> chargé(s) : ${state.fileNames.join(', ')} — cliquez pour recommencer` : '<b>Cliquez</b> ou déposez un ou plusieurs fichiers .csv / .xlsx ici (une école qui envoie un fichier par classe : sélectionnez-les tous)'}</div>
+          <input type="file" id="ep-file" accept=".csv,.xlsx,.xls,.docx,.pdf" multiple />
+          <div class="ep-drop-label">${state.fileNames.length ? `<b>${state.fileNames.length} fichier(s)</b> chargé(s) : ${state.fileNames.join(', ')} — cliquez pour recommencer` : '<b>Cliquez</b> ou déposez un ou plusieurs fichiers .csv / .xlsx / .xls / .docx / .pdf ici (une école qui envoie un fichier par classe : sélectionnez-les tous)'}</div>
         </div>
       </div>
 
@@ -370,8 +484,15 @@
             <label class="ep-toggle"><input type="checkbox" id="ep-aff" ${state.excludeAff ? 'checked' : ''}/> Exclure les élèves affectés (AFF) — ${affCount} trouvé(s)</label>
             <label class="ep-toggle"><input type="checkbox" id="ep-phone-missing" ${state.excludePhoneMissing ? 'checked' : ''}/> Exclure les élèves sans téléphone — ${state.rows.filter(r => !r.telephone).length} trouvé(s)</label>
             <label class="ep-toggle"><input type="checkbox" id="ep-phone-has" ${state.excludePhoneHas ? 'checked' : ''}/> Exclure les élèves avec téléphone — ${state.rows.filter(r => r.telephone).length} trouvé(s)</label>
+            <label class="ep-toggle">
+              <input type="checkbox" id="ep-default-phone" ${state.useDefaultPhone ? 'checked' : ''}/>
+              Numéro par défaut pour ceux sans téléphone :
+              <input type="text" id="ep-default-phone-value" value="${escapeHtml(state.defaultPhoneValue)}" class="ep-select" style="width:110px;margin-left:4px;" />
+            </label>
             <label class="ep-toggle"><input type="checkbox" id="ep-upper" ${state.upperCase ? 'checked' : ''}/> Nom/prénom en MAJUSCULES</label>
             ${state.hasMatricule ? `<label class="ep-toggle"><input type="checkbox" id="ep-matricule" ${state.includeMatricule ? 'checked' : ''}/> Inclure la colonne matricule <span class="ep-badge">trouvée dans le fichier</span></label>` : ''}
+            <label class="ep-toggle"><input type="checkbox" id="ep-affectation" ${state.includeAffectation ? 'checked' : ''}/> Inclure la colonne affectation ${state.hasAffectation ? '<span class="ep-badge">trouvée dans le fichier</span>' : '<span class="ep-badge">par défaut : Non affecté</span>'}</label>
+            ${state.hasTelephone2 ? `<label class="ep-toggle"><input type="checkbox" id="ep-telephone2" ${state.includeTelephone2 ? 'checked' : ''}/> Inclure le 2e numéro parent <span class="ep-badge">trouvé dans le fichier</span></label>` : ''}
           </div>
         </div>
         <div class="ep-stats">
@@ -434,7 +555,7 @@
         </div>
         <div class="ep-scroll" id="ep-scroll">
           <table class="ep-table">
-            <thead><tr>${state.hasMatricule && state.includeMatricule ? '<th>matricule</th>' : ''}<th>nom</th><th>prenom</th><th>classe</th><th>telephone</th></tr></thead>
+            <thead><tr>${state.hasMatricule && state.includeMatricule ? '<th>matricule</th>' : ''}<th>nom</th><th>prenom</th><th>classe</th><th>telephone</th>${state.hasTelephone2 && state.includeTelephone2 ? '<th>telephone2</th>' : ''}${state.includeAffectation ? '<th>affectation</th>' : ''}</tr></thead>
             <tbody>
               ${processed.map(r => {
                 const ov = state.overrides[r.id] || {};
@@ -450,6 +571,8 @@
                   ${cell('prenom')}
                   ${cell('classe')}
                   ${cell('telephone')}
+                  ${state.hasTelephone2 && state.includeTelephone2 ? cell('telephone2') : ''}
+                  ${state.includeAffectation ? cell('affectation') : ''}
                 </tr>
               `;}).join('')}
             </tbody>
@@ -477,10 +600,18 @@
     if (phoneMissingEl) phoneMissingEl.onchange = (e) => { state.excludePhoneMissing = e.target.checked; render(); };
     const phoneHasEl = document.getElementById('ep-phone-has');
     if (phoneHasEl) phoneHasEl.onchange = (e) => { state.excludePhoneHas = e.target.checked; render(); };
+    const defaultPhoneEl = document.getElementById('ep-default-phone');
+    if (defaultPhoneEl) defaultPhoneEl.onchange = (e) => { state.useDefaultPhone = e.target.checked; render(); };
+    const defaultPhoneValueEl = document.getElementById('ep-default-phone-value');
+    if (defaultPhoneValueEl) defaultPhoneValueEl.onchange = (e) => { state.defaultPhoneValue = e.target.value.trim(); render(); };
     const upperEl = document.getElementById('ep-upper');
     if (upperEl) upperEl.onchange = (e) => { state.upperCase = e.target.checked; render(); };
     const matEl = document.getElementById('ep-matricule');
     if (matEl) matEl.onchange = (e) => { state.includeMatricule = e.target.checked; render(); };
+    const affectationEl = document.getElementById('ep-affectation');
+    if (affectationEl) affectationEl.onchange = (e) => { state.includeAffectation = e.target.checked; render(); };
+    const tel2El = document.getElementById('ep-telephone2');
+    if (tel2El) tel2El.onchange = (e) => { state.includeTelephone2 = e.target.checked; render(); };
     const nameEl = document.getElementById('ep-filename-input');
     if (nameEl) nameEl.oninput = (e) => { state.customName = e.target.value; };
 
@@ -609,25 +740,23 @@ Si aucune colonne ne contient la classe mais qu'une valeur identique se répète
 Réponds UNIQUEMENT avec un objet JSON strictement de cette forme, sans texte autour, sans balises markdown :
 {"headerRowIndex": <entier>, "columns": {"<indexColonne>": "<champ ou null>", ...}}`;
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
-    let data;
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1000,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      data = await response.json();
-    } finally {
-      clearTimeout(timeout);
-    }
+    // Pas d'AbortController ici : dans l'aperçu claude.ai, l'appel fetch est relayé au parent
+    // via postMessage, qui ne sait pas cloner un AbortSignal (erreur navigateur, pas un bug de
+    // config). On simule un délai d'attente en "abandonnant" simplement l'attente si trop long,
+    // sans essayer d'annuler la requête sous-jacente.
+    const fetchPromise = fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('délai dépassé (30s)')), 30000));
+    const response = await Promise.race([fetchPromise, timeoutPromise]);
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
     const text = (data.content || []).map(b => b.text || '').join('').trim();
     const cleaned = text.replace(/^```json\s*|^```\s*|```$/g, '').trim();
     let parsed;
@@ -650,6 +779,88 @@ Réponds UNIQUEMENT avec un objet JSON strictement de cette forme, sans texte au
     if (e.target.files.length) processFiles(Array.from(e.target.files));
   }
 
+  // Factorise extraction + repli "à mapper" pour une liste de tables déjà découpées en
+  // grilles (AOA) — utilisé par xlsx (une table par feuille), docx (une table par tableau
+  // Word) et pdf (une table par page reconstruite).
+  function resolveTables(tables, fileName, multiSource) {
+    let rows = [];
+    const pending = [];
+    tables.forEach(({ title, aoa }) => {
+      const extracted = extractRows(aoa, title);
+      if (extracted) rows = rows.concat(extracted);
+      else pending.push({ source: multiSource ? `${fileName} — ${title}` : fileName, aoa, sheetTitle: title });
+    });
+    return { rows, pending };
+  }
+
+  // Extrait chaque tableau d'un fichier Word (.docx) en grille de cellules (AOA).
+  // Ne gère que les vrais tableaux Word — un .docx sans tableau ne produira rien.
+  async function docxToTables(arrayBuffer, fileBaseName) {
+    const result = await mammoth.convertToHtml({ arrayBuffer });
+    const doc = new DOMParser().parseFromString(result.value, 'text/html');
+    const tableEls = Array.from(doc.querySelectorAll('table'));
+    return tableEls.map((tableEl, i) => {
+      const aoa = Array.from(tableEl.querySelectorAll('tr')).map(tr =>
+        Array.from(tr.querySelectorAll('td,th')).map(cell => cell.textContent.trim())
+      );
+      return { title: tableEls.length > 1 ? `tableau ${i + 1}` : fileBaseName, aoa };
+    });
+  }
+
+  // Reconstruit un tableau à partir du texte positionné d'un PDF : regroupe les fragments de
+  // texte par ligne (proximité verticale), puis par colonnes (positions horizontales qui se
+  // répètent d'une ligne à l'autre). Fonctionne bien pour un export PDF "propre" (Excel -> PDF,
+  // logiciel de gestion scolaire) ; moins bien pour une mise en page libre — dans ce cas le
+  // fichier atterrit dans le mapping manuel / suggestion IA comme n'importe quel format inconnu.
+  async function pdfToTables(arrayBuffer, fileBaseName) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const allItems = [];
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      content.items.forEach(it => {
+        if (!it.str || !it.str.trim()) return;
+        allItems.push({ text: it.str, x: it.transform[4], y: it.transform[5], page: p });
+      });
+    }
+    if (!allItems.length) return [{ title: fileBaseName, aoa: [] }];
+
+    // regroupe en lignes par proximité verticale (page + y arrondi)
+    const lineKey = (it) => it.page + '_' + Math.round(it.y / 4) * 4;
+    const lineMap = new Map();
+    allItems.forEach(it => {
+      const k = lineKey(it);
+      if (!lineMap.has(k)) lineMap.set(k, []);
+      lineMap.get(k).push(it);
+    });
+    const lines = Array.from(lineMap.values()).map(items => items.sort((a, b) => a.x - b.x));
+    lines.sort((a, b) => (a[0].page - b[0].page) || (b[0].y - a[0].y));
+
+    // détermine les colonnes en regroupant les positions x observées sur toutes les lignes
+    const xs = allItems.map(it => it.x).sort((a, b) => a - b);
+    const bins = [];
+    xs.forEach(x => {
+      const last = bins[bins.length - 1];
+      if (last && x - last.max < 12) { last.max = x; } else { bins.push({ min: x, max: x }); }
+    });
+    const colOf = (x) => {
+      let best = 0, bestDist = Infinity;
+      bins.forEach((b, i) => { const d = Math.abs(x - (b.min + b.max) / 2); if (d < bestDist) { bestDist = d; best = i; } });
+      return best;
+    };
+
+    const aoa = lines.map(items => {
+      const row = new Array(bins.length).fill('');
+      items.forEach(it => {
+        const ci = colOf(it.x);
+        row[ci] = row[ci] ? row[ci] + ' ' + it.text : it.text;
+      });
+      return row;
+    });
+    return [{ title: fileBaseName, aoa }];
+  }
+
   function readFileAsRows(file) {
     const ext = file.name.split('.').pop().toLowerCase();
     const fileBaseName = file.name.replace(/\.[^.]+$/, '');
@@ -666,19 +877,38 @@ Réponds UNIQUEMENT avec un objet JSON strictement de cette forme, sans texte au
           });
         };
         reader.readAsText(file, 'UTF-8');
+      } else if (ext === 'docx') {
+        reader.onload = async (e) => {
+          try {
+            const tables = await docxToTables(e.target.result, fileBaseName);
+            if (!tables.length) {
+              resolve({ rows: [], pending: [{ source: file.name + ' (aucun tableau trouvé)', aoa: [['Aucun tableau Word détecté dans ce document.']], sheetTitle: fileBaseName }] });
+              return;
+            }
+            resolve(resolveTables(tables, file.name, tables.length > 1));
+          } catch (err) {
+            resolve({ rows: [], pending: [{ source: file.name + ' (lecture impossible)', aoa: [[String(err.message || err)]], sheetTitle: fileBaseName }] });
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } else if (ext === 'pdf') {
+        reader.onload = async (e) => {
+          try {
+            const tables = await pdfToTables(e.target.result, fileBaseName);
+            resolve(resolveTables(tables, file.name, false));
+          } catch (err) {
+            resolve({ rows: [], pending: [{ source: file.name + ' (lecture impossible)', aoa: [[String(err.message || err)]], sheetTitle: fileBaseName }] });
+          }
+        };
+        reader.readAsArrayBuffer(file);
       } else {
         reader.onload = (e) => {
           const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: false });
-          let rows = [];
-          const pending = [];
-          wb.SheetNames.forEach(name => {
-            const aoa = sheetToAOA(wb.Sheets[name]);
-            const sheetTitle = wb.SheetNames.length > 1 ? name : fileBaseName;
-            const extracted = extractRows(aoa, sheetTitle);
-            if (extracted) rows = rows.concat(extracted);
-            else pending.push({ source: `${file.name} — feuille "${name}"`, aoa, sheetTitle });
-          });
-          resolve({ rows, pending });
+          const tables = wb.SheetNames.map(name => ({
+            title: wb.SheetNames.length > 1 ? name : fileBaseName,
+            aoa: sheetToAOA(wb.Sheets[name]),
+          }));
+          resolve(resolveTables(tables, file.name, wb.SheetNames.length > 1));
         };
         reader.readAsArrayBuffer(file);
       }
@@ -707,8 +937,16 @@ Réponds UNIQUEMENT avec un objet JSON strictement de cette forme, sans texte au
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
 
+  function buildExportColumns() {
+    const cols = ['nom', 'prenom', 'classe', 'telephone'];
+    if (state.hasMatricule && state.includeMatricule) cols.unshift('matricule');
+    if (state.hasTelephone2 && state.includeTelephone2) cols.push('telephone2');
+    if (state.includeAffectation) cols.push('affectation');
+    return cols;
+  }
+
   function downloadCsv(rows) {
-    const cols = (state.hasMatricule && state.includeMatricule) ? ['matricule', 'nom', 'prenom', 'classe', 'telephone'] : ['nom', 'prenom', 'classe', 'telephone'];
+    const cols = buildExportColumns();
     const lines = [cols.join(',')];
     rows.forEach(r => lines.push(cols.map(c => toCsvValue(r[c])).join(',')));
     const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
@@ -716,7 +954,7 @@ Réponds UNIQUEMENT avec un objet JSON strictement de cette forme, sans texte au
   }
 
   function downloadXlsx(rows) {
-    const cols = (state.hasMatricule && state.includeMatricule) ? ['matricule', 'nom', 'prenom', 'classe', 'telephone'] : ['nom', 'prenom', 'classe', 'telephone'];
+    const cols = buildExportColumns();
     const ws = XLSX.utils.json_to_sheet(rows, { header: cols });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'eleves');
